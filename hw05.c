@@ -23,50 +23,67 @@ static __inline__ ticks getticks(void)
 
 
 int main(int argc, char** argv) {
-  // Initialize MPI
   MPI_Init(&argc, &argv);
 
+  int blockSize, rank, totalRanks, numBytes;
+  char* outputFilepath, *data;
+  MPI_File outputMPIFile;
+  ticks start = 0, finish = 0;
+  double readSeconds, writeSeconds;
+
+  // parse command line arguments
   if (argc != 3) {
-    printf("Usage: %s NumElements HaloSize\n", argv[0]);
+    printf("Usage: %s [block size=1|2|4|8|16] [output-file]\n", argv[0]);
     return -1;
   }
+  blockSize = atoi(argv[1]);
+  outputFilepath = argv[2];
 
-  // Parse parameters
-  // TODO
-
-  // Get rank
-  int rank;
+  // get MPI info
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-
-  // Get total ranks
-  int totalRanks;
   MPI_Comm_size(MPI_COMM_WORLD, &totalRanks);
 
-  // Get the name of the processor
-  char processor_name[MPI_MAX_PROCESSOR_NAME];
-  int name_len;
-  MPI_Get_processor_name(processor_name, &name_len);
-
-  // Print off a hello world message
-  printf("Hello world on processor %s, rank %d"
-	 " out of %d processors\n",
-	 processor_name, rank, totalRanks);
-
-  bool isMainProcess = (rank == 0);
-  if (isMainProcess) {
-    // Main process setup code
+  // allocate blocksize MB of data
+  numBytes = blockSize * 1024 * 1024;
+  data = (char*)malloc(numBytes);
+  if (data == NULL) {
+    fprintf(stderr, "Error: Process %d failed to allocate memory\n", rank);
+    MPI_Abort(MPI_COMM_WORLD, -1);
   }
-
-  // === Multi-process code start ===
-
+  // fill with dummy data
+  for (int i = 0; i < numBytes; i++) {
+    data[i] = 1;
+  }
   MPI_Barrier(MPI_COMM_WORLD);
 
-  // === Multi-process code end ===
-
-  if (isMainProcess) {
-    // Main process end up code
+  // time the data write
+  start = getticks();
+  MPI_File_open(MPI_COMM_WORLD, outputFilepath, MPI_MODE_CREATE | MPI_MODE_WRONLY, MPI_INFO_NULL, &outputMPIFile);
+  MPI_File_write_at(outputMPIFile, rank * numBytes, data, numBytes, MPI_CHAR, MPI_STATUS_IGNORE);
+  MPI_File_close(&outputMPIFile);
+  MPI_Barrier(MPI_COMM_WORLD);
+  finish = getticks();
+  writeSeconds = (double)(finish - start) / (double)512000000.0;
+  
+  // time the data read
+  start = getticks();
+  MPI_File_open(MPI_COMM_WORLD, outputFilepath, MPI_MODE_RDONLY, MPI_INFO_NULL, &outputMPIFile);
+  MPI_File_read_at(outputMPIFile, rank * numBytes, data, numBytes, MPI_CHAR, MPI_STATUS_IGNORE);
+  MPI_File_close(&outputMPIFile);
+  MPI_Barrier(MPI_COMM_WORLD);
+  finish = getticks();
+  readSeconds = (double)(finish - start) / (double)512000000.0;
+  
+  // print the MB/s (only rank 0 reports)
+  if (rank == 0) {
+    double readMbPerSecond = (double) (blockSize * totalRanks) / readSeconds;
+    double writeMbPerSecond = (double) (blockSize * totalRanks) / writeSeconds;
+    printf("Read: %lf\n", readMbPerSecond);
+    printf("Write: %lf\n", writeMbPerSecond);
   }
 
+  // clean up
+  free(data);
   MPI_Finalize();
 
   return 0;
