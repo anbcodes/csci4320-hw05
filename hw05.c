@@ -25,7 +25,7 @@ static __inline__ ticks getticks(void)
 int main(int argc, char** argv) {
   MPI_Init(&argc, &argv);
 
-  int blockSize, rank, totalRanks, numBytes;
+  int blockSize, rank, totalRanks, numBytes, stride;
   char* outputFilepath, *data;
   MPI_File outputMPIFile;
   ticks start = 0, finish = 0;
@@ -45,6 +45,7 @@ int main(int argc, char** argv) {
 
   // allocate blocksize MB of data
   numBytes = blockSize * 1024 * 1024;
+  stride = numBytes * totalRanks;
   data = (char*)malloc(numBytes);
   if (data == NULL) {
     fprintf(stderr, "Error: Process %d failed to allocate memory\n", rank);
@@ -59,7 +60,10 @@ int main(int argc, char** argv) {
   // time the data write
   start = getticks();
   MPI_File_open(MPI_COMM_WORLD, outputFilepath, MPI_MODE_CREATE | MPI_MODE_WRONLY, MPI_INFO_NULL, &outputMPIFile);
-  MPI_File_write_at(outputMPIFile, rank * numBytes, data, numBytes, MPI_CHAR, MPI_STATUS_IGNORE);
+  // each rank writes its own block of data 32 times (interleaved with the other ranks)
+  for (int i = 0; i < 32; i++) {
+    MPI_File_write_at(outputMPIFile, i * stride + rank * numBytes, data, numBytes, MPI_CHAR, MPI_STATUS_IGNORE);
+  }
   MPI_File_close(&outputMPIFile);
   MPI_Barrier(MPI_COMM_WORLD);
   finish = getticks();
@@ -68,7 +72,10 @@ int main(int argc, char** argv) {
   // time the data read
   start = getticks();
   MPI_File_open(MPI_COMM_WORLD, outputFilepath, MPI_MODE_RDONLY, MPI_INFO_NULL, &outputMPIFile);
-  MPI_File_read_at(outputMPIFile, rank * numBytes, data, numBytes, MPI_CHAR, MPI_STATUS_IGNORE);
+  // each rank reads its own block of data 32 times (interleaved with the other ranks)
+  for (int i = 0; i < 32; i++) {
+    MPI_File_read_at(outputMPIFile, i * stride + rank * numBytes, data, numBytes, MPI_CHAR, MPI_STATUS_IGNORE);
+  }
   MPI_File_close(&outputMPIFile);
   MPI_Barrier(MPI_COMM_WORLD);
   finish = getticks();
@@ -76,8 +83,8 @@ int main(int argc, char** argv) {
   
   // print the MB/s (only rank 0 reports)
   if (rank == 0) {
-    double readMbPerSecond = (double) (blockSize * totalRanks) / readSeconds;
-    double writeMbPerSecond = (double) (blockSize * totalRanks) / writeSeconds;
+    double readMbPerSecond = (double) (blockSize * totalRanks * 32) / readSeconds;
+    double writeMbPerSecond = (double) (blockSize * totalRanks * 32) / writeSeconds;
     printf("Read: %lf\n", readMbPerSecond);
     printf("Write: %lf\n", writeMbPerSecond);
   }
